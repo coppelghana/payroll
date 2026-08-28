@@ -1,20 +1,23 @@
 import { createNeonAuth } from "@neondatabase/auth/next/server";
 
-const isProductionBuild = process.env.NEXT_PHASE === "phase-production-build";
+type NeonAuth = ReturnType<typeof createNeonAuth>;
 
-function authConfig(name: "NEON_AUTH_BASE_URL" | "NEON_AUTH_COOKIE_SECRET") {
-  const value = process.env[name];
-  if (value) return value;
-  if (isProductionBuild) {
-    return name === "NEON_AUTH_BASE_URL"
-      ? "https://build-placeholder.invalid/auth"
-      : "build-only-placeholder-secret-32-characters";
-  }
-  throw new Error(`${name} is not configured in the runtime environment`);
+let authClient: NeonAuth | undefined;
+
+export function getAuth() {
+  if (authClient) return authClient;
+
+  const baseUrl = process.env.NEON_AUTH_BASE_URL;
+  const cookieSecret = process.env.NEON_AUTH_COOKIE_SECRET;
+
+  if (!baseUrl) throw new Error("NEON_AUTH_BASE_URL is not configured in the runtime environment");
+  if (!cookieSecret) throw new Error("NEON_AUTH_COOKIE_SECRET is not configured in the runtime environment");
+
+  authClient = createNeonAuth({
+    baseUrl,
+    cookies: { secret: cookieSecret },
+    logLevel: "warn",
+  });
+
+  return authClient;
 }
-
-export const auth = createNeonAuth({
-  baseUrl: authConfig("NEON_AUTH_BASE_URL"),
-  cookies: { secret: authConfig("NEON_AUTH_COOKIE_SECRET") },
-  logLevel: "warn",
-});

@@ -1,6 +1,6 @@
 "use server";
 
-import { auth } from "@/lib/auth/server";
+import { getAuth } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { identity, isRetiredDemoIdentity, requireRoles, ROLES } from "@/lib/security";
 import { timingSafeEqual } from "node:crypto";
@@ -20,7 +20,7 @@ export async function signInAction(_state: { error: string } | null, formData: F
   const parsed = z.object({ email: z.email(), password: z.string().min(8) }).safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Enter a valid email address and password." };
   if (isRetiredDemoIdentity(parsed.data.email)) return { error: "This demonstration account has been retired." };
-  const { error } = await auth.signIn.email(parsed.data);
+  const { error } = await getAuth().signIn.email(parsed.data);
   if (error) return { error: "Sign-in failed. Check your credentials." };
   redirect("/dashboard");
 }
@@ -29,13 +29,13 @@ export async function signUpAction(_state: { error: string } | null, formData: F
   const parsed = z.object({ name: text, email: z.email(), password: z.string().min(12).max(128) }).safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Use a valid email and a password of at least 12 characters." };
   if (isRetiredDemoIdentity(parsed.data.email)) return { error: "This demonstration account has been retired." };
-  const { error } = await auth.signUp.email(parsed.data);
+  const { error } = await getAuth().signUp.email(parsed.data);
   if (error) return { error: error.message || "Account creation failed." };
   redirect("/setup");
 }
 
 export async function signOutAction() {
-  await auth.signOut();
+  await getAuth().signOut();
   redirect("/auth/sign-in");
 }
 

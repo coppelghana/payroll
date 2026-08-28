@@ -1,4 +1,4 @@
-import { auth } from "@/lib/auth/server";
+import { getAuth } from "@/lib/auth/server";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 
@@ -21,6 +21,7 @@ export type Profile = {
 };
 
 export async function identity(requireProfile = true) {
+  const auth = getAuth();
   const { data: session } = await auth.getSession();
   if (!session?.user?.id || !session.user.email) redirect("/auth/sign-in");
   if (isRetiredDemoIdentity(session.user.email)) {
