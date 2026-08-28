@@ -5,6 +5,12 @@ import { redirect } from "next/navigation";
 export const ROLES = ["Payroll Officer","Head of Department","General Manager","CEO","Payment Officer","HR / Administrator","System Administrator"] as const;
 export type Role = typeof ROLES[number];
 
+const RETIRED_DEMO_EMAILS = new Set(["payroll@coppelghana.com"]);
+
+export function isRetiredDemoIdentity(email: string | null | undefined) {
+  return Boolean(email && RETIRED_DEMO_EMAILS.has(email.trim().toLowerCase()));
+}
+
 export type Profile = {
   id: string;
   auth_user_id: string;
@@ -17,6 +23,10 @@ export type Profile = {
 export async function identity(requireProfile = true) {
   const { data: session } = await auth.getSession();
   if (!session?.user?.id || !session.user.email) redirect("/auth/sign-in");
+  if (isRetiredDemoIdentity(session.user.email)) {
+    await auth.signOut();
+    redirect("/auth/sign-in?error=Demo+access+has+been+retired");
+  }
   const sql = db();
   let rows = await sql`SELECT id,auth_user_id,email,full_name,role,department_id
     FROM user_profiles WHERE active=true AND (auth_user_id=${session.user.id} OR (auth_user_id IS NULL AND lower(email)=lower(${session.user.email}))) LIMIT 1` as Profile[];
