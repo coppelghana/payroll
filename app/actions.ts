@@ -2,7 +2,7 @@
 
 import { auth } from "@/lib/auth/server";
 import { db } from "@/lib/db";
-import { identity, requireRoles, ROLES } from "@/lib/security";
+import { identity, isRetiredDemoIdentity, requireRoles, ROLES } from "@/lib/security";
 import { timingSafeEqual } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
@@ -19,6 +19,7 @@ function safeEqual(a: string, b: string) {
 export async function signInAction(_state: { error: string } | null, formData: FormData) {
   const parsed = z.object({ email: z.email(), password: z.string().min(8) }).safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Enter a valid email address and password." };
+  if (isRetiredDemoIdentity(parsed.data.email)) return { error: "This demonstration account has been retired." };
   const { error } = await auth.signIn.email(parsed.data);
   if (error) return { error: "Sign-in failed. Check your credentials." };
   redirect("/dashboard");
@@ -27,6 +28,7 @@ export async function signInAction(_state: { error: string } | null, formData: F
 export async function signUpAction(_state: { error: string } | null, formData: FormData) {
   const parsed = z.object({ name: text, email: z.email(), password: z.string().min(12).max(128) }).safeParse(Object.fromEntries(formData));
   if (!parsed.success) return { error: "Use a valid email and a password of at least 12 characters." };
+  if (isRetiredDemoIdentity(parsed.data.email)) return { error: "This demonstration account has been retired." };
   const { error } = await auth.signUp.email(parsed.data);
   if (error) return { error: error.message || "Account creation failed." };
   redirect("/setup");
@@ -59,6 +61,7 @@ export async function inviteUser(formData: FormData) {
   const parsed = z.object({ email: z.email(), fullName: text, role: roleSchema }).parse({
     email: formData.get("email"), fullName: formData.get("fullName"), role: formData.get("role")
   });
+  if (isRetiredDemoIdentity(parsed.email)) throw new Error("The retired demonstration account cannot be granted access.");
   const sql = db();
   await sql`WITH invited AS (
     INSERT INTO user_profiles(email,full_name,role) VALUES(${parsed.email.toLowerCase()},${parsed.fullName},${parsed.role})
