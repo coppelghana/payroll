@@ -230,7 +230,11 @@ export async function updateSetting(formData: FormData) {
   try {
     await sql`WITH changed AS (
       UPDATE statutory_settings
-      SET rate=${parsed.data.rate},source_reference=${parsed.data.source},updated_by=${user.id},updated_at=now()
+      SET rate=${parsed.data.rate},source_reference=${parsed.data.source},updated_by=${user.id},updated_at=now(),
+        confirmed_by=CASE WHEN category IN ('PAYE','Pension') THEN NULL ELSE confirmed_by END,
+        confirmed_by_name=CASE WHEN category IN ('PAYE','Pension') THEN NULL ELSE confirmed_by_name END,
+        confirmed_at=CASE WHEN category IN ('PAYE','Pension') THEN NULL ELSE confirmed_at END,
+        confirmation_note=CASE WHEN category IN ('PAYE','Pension') THEN NULL ELSE confirmation_note END
       WHERE setting_name=${parsed.data.settingName} AND active=true
       RETURNING setting_name
     ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
@@ -240,5 +244,38 @@ export async function updateSetting(formData: FormData) {
     redirect("/settings?error=The+setting+could+not+be+saved");
   }
   revalidatePath("/settings");
+  revalidatePath("/dashboard");
   redirect("/settings?success=Setting+updated");
+}
+
+export async function confirmStatutoryRates(formData: FormData) {
+  const { user, profile } = await requireRoles("Payroll Officer");
+  const parsed = z.object({
+    reference: text,
+    attestation: z.literal("confirmed"),
+  }).safeParse(Object.fromEntries(formData));
+  if (!parsed.success) redirect("/settings?error=Enter+a+verification+reference+and+confirm+the+Accounts+attestation");
+
+  try {
+    await db()`WITH confirmed AS (
+      UPDATE statutory_settings
+      SET confirmed_by=${user.id},confirmed_by_name=${profile.full_name},confirmed_at=now(),confirmation_note=${parsed.data.reference},updated_at=now()
+      WHERE active=true AND category IN ('PAYE','Pension') AND confirmed_at IS NULL
+      RETURNING id
+    ), summary AS (
+      SELECT count(*)::int AS confirmed_count FROM confirmed
+    )
+    INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
+      SELECT 'STATUTORY_RATES_CONFIRMED','statutory_settings','active-statutory-rates',${user.id},${profile.full_name},${profile.role},
+        'Active PAYE and pension settings confirmed by Accounts',
+        jsonb_build_object('confirmed_count',confirmed_count,'reference',${parsed.data.reference}::text)
+      FROM summary WHERE confirmed_count>0`;
+  } catch (error) {
+    console.error("[accounts] statutory confirmation failed", { message: error instanceof Error ? error.message : "Unknown database error" });
+    redirect("/settings?error=Statutory+rates+could+not+be+confirmed");
+  }
+
+  revalidatePath("/settings");
+  revalidatePath("/dashboard");
+  redirect("/settings?success=Current+statutory+rates+confirmed+by+Accounts");
 }
