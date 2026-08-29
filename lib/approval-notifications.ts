@@ -14,7 +14,7 @@ type EmailNotification = {
 function emailConfiguration() {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const from = process.env.PAYROLL_EMAIL_FROM?.trim();
-  const appUrl = (process.env.PAYROLL_APP_URL?.trim() || "https://coppel-payroll-coppelgh-5560.vercel.app").replace(/\/$/, "");
+  const appUrl = (process.env.PAYROLL_APP_URL?.trim() || "https://payroll.coppelafrica.com").replace(/\/$/, "");
   return apiKey && from ? { apiKey, from, appUrl } : null;
 }
 
