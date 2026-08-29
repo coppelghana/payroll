@@ -1,4 +1,5 @@
-import { confirmStatutoryRates, inviteUser, updateSetting } from "@/app/actions";
+import { confirmStatutoryRates, inviteUser, retryApprovalEmails, updateSetting } from "@/app/actions";
+import { approvalEmailConfigured } from "@/lib/approval-notifications";
 import { db } from "@/lib/db";
 import { date } from "@/lib/format";
 import { identity, ROLES } from "@/lib/security";
@@ -40,6 +41,7 @@ export default async function SettingsPage() {
   const users = userRows as UserProfile[];
   const admin = profile!.role === "System Administrator";
   const accounts = profile!.role === "Payroll Officer";
+  const emailConfigured = approvalEmailConfigured();
   const statutorySettings = settings.filter((setting) => setting.category === "PAYE" || setting.category === "Pension");
   const pendingConfirmations = statutorySettings.filter((setting) => !setting.confirmed_at).length;
   const latestConfirmation = statutorySettings
@@ -68,7 +70,19 @@ export default async function SettingsPage() {
         <div className="data-row"><span>Role enforcement</span><span className="badge green">Server-side</span></div>
         <div className="data-row"><span>Audit records</span><span className="badge green">Append-only</span></div>
         <div className="data-row"><span>Payroll transitions</span><span className="badge green">Database function</span></div>
+        <div className="data-row"><span>Approval email</span><span className={`badge ${emailConfigured ? "green" : "amber"}`}>{emailConfigured ? "Configured" : "Setup required"}</span></div>
       </article>
+    </section>
+    <section className="card space-top">
+      <div className="card-head"><div><h2>Approval notification rules</h2><p>Every rule creates an in-app alert and queues an email for each active user assigned the target role.</p></div><span className={`badge ${emailConfigured ? "green" : "amber"}`}>{emailConfigured ? "In-app + email" : "In-app active"}</span></div>
+      <div className="data-row"><span>Payroll submitted</span><b>Head of Department</b></div>
+      <div className="data-row"><span>Department verification completed</span><b>General Manager</b></div>
+      <div className="data-row"><span>GM approval exceeds escalation threshold</span><b>CEO</b></div>
+      <div className="data-row"><span>GM or CEO gives final approval</span><b>Payment Officer</b></div>
+      <div className="data-row"><span>Payroll returned for correction</span><b>Payroll Officer</b></div>
+      <div className="data-row"><span>Payment recorded and payroll locked</span><b>Payroll Officer · System Administrator</b></div>
+      {!emailConfigured ? <div className="info-box compact space-top">Add RESEND_API_KEY and PAYROLL_EMAIL_FROM in Vercel to activate email delivery. Pending emails remain available for retry.</div> : null}
+      {admin && emailConfigured ? <form action={retryApprovalEmails} className="space-top"><button className="button">Retry queued approval emails</button></form> : null}
     </section>
     <section className="card space-top" id="statutory-confirmation">
       <div className="card-head">
