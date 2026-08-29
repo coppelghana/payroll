@@ -1,6 +1,7 @@
 "use server";
 
 import { getAuth } from "@/lib/auth/server";
+import { deliverApprovalEmails } from "@/lib/approval-notifications";
 import { db } from "@/lib/db";
 import { identity, isRetiredDemoIdentity, requireRoles, ROLES } from "@/lib/security";
 import { timingSafeEqual } from "node:crypto";
@@ -15,6 +16,15 @@ const employmentStatusSchema = z.enum(["Active", "Suspended", "On Leave", "Termi
 function safeEqual(a: string, b: string) {
   const x = Buffer.from(a), y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
+}
+
+async function deliverApprovalEmailsSafely(periodId: string) {
+  try {
+    const delivery = await deliverApprovalEmails(periodId);
+    if (delivery.failed>0) console.error("[notifications] approval email delivery failed", { periodId, failed: delivery.failed });
+  } catch (error) {
+    console.error("[notifications] approval email queue failed", { periodId, message: error instanceof Error ? error.message : "Unknown notification error" });
+  }
 }
 
 export async function signInAction(_state: { error: string } | null, formData: FormData) {
@@ -211,15 +221,34 @@ export async function recalculatePayroll(formData: FormData) {
 export async function transitionPayroll(formData: FormData) {
   const { user, profile } = await requireRoles("Payroll Officer","Head of Department","General Manager","CEO");
   const parsed = z.object({ periodId: z.uuid(), action: z.enum(["submit","hod_verify","gm_approve","ceo_approve","return"]), comment: z.string().trim().max(500).optional() }).parse(Object.fromEntries(formData));
-  await db()`SELECT payroll_transition(${parsed.periodId},${parsed.action},${user.id},${profile.full_name},${profile.role},${parsed.comment || null},NULL)`;
-  revalidatePath("/approvals"); revalidatePath("/dashboard"); revalidatePath("/payroll");
+  await db()`SELECT payroll_transition_notify(${parsed.periodId},${parsed.action},${user.id},${profile.full_name},${profile.role},${parsed.comment || null},NULL)`;
+  await deliverApprovalEmailsSafely(parsed.periodId);
+  revalidatePath("/approvals"); revalidatePath("/dashboard"); revalidatePath("/payroll"); revalidatePath("/notifications");
 }
 
 export async function recordPayment(formData: FormData) {
   const { user, profile } = await requireRoles("Payment Officer");
   const parsed = z.object({ periodId: z.uuid(), paymentReference: z.string().trim().min(4).max(120), comment: z.string().trim().max(500).optional() }).parse(Object.fromEntries(formData));
-  await db()`SELECT payroll_transition(${parsed.periodId},'record_payment',${user.id},${profile.full_name},${profile.role},${parsed.comment || null},${parsed.paymentReference})`;
-  revalidatePath("/approvals"); revalidatePath("/dashboard"); revalidatePath("/payroll");
+  await db()`SELECT payroll_transition_notify(${parsed.periodId},'record_payment',${user.id},${profile.full_name},${profile.role},${parsed.comment || null},${parsed.paymentReference})`;
+  await deliverApprovalEmailsSafely(parsed.periodId);
+  revalidatePath("/approvals"); revalidatePath("/dashboard"); revalidatePath("/payroll"); revalidatePath("/notifications");
+}
+
+export async function markAllNotificationsRead() {
+  const { profile } = await identity();
+  await db()`UPDATE approval_notifications SET read_at=now()
+    WHERE recipient_profile_id=${profile!.id} AND read_at IS NULL`;
+  revalidatePath("/notifications");
+}
+
+export async function retryApprovalEmails() {
+  await requireRoles("System Administrator");
+  const delivery = await deliverApprovalEmails();
+  revalidatePath("/notifications");
+  revalidatePath("/settings");
+  if (!delivery.configured) redirect("/settings?error=Approval+email+is+not+configured");
+  if (delivery.failed>0) redirect(`/settings?error=${encodeURIComponent(`${delivery.failed} approval email(s) could not be delivered`)}`);
+  redirect(`/settings?success=${encodeURIComponent(`${delivery.sent} queued approval email(s) delivered`)}`);
 }
 
 export async function updateSetting(formData: FormData) {
