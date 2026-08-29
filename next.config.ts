@@ -5,7 +5,10 @@ const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
       bodySizeLimit: "1mb",
-      allowedOrigins: ["coppel-payroll-coppelgh-5560.vercel.app"],
+      allowedOrigins: [
+        "coppel-payroll-coppelgh-5560.vercel.app",
+        "payroll.coppelghana.com",
+      ],
     },
   },
   async headers() {
