@@ -1,111 +1,41 @@
-import { confirmStatutoryRates, inviteUser, retryApprovalEmails, updateSetting } from "@/app/actions";
+import { confirmStatutoryRates, inviteUser, retryApprovalEmails, updateSetting, updateUserAccess } from "@/app/actions";
 import { approvalEmailConfigured } from "@/lib/approval-notifications";
 import { db } from "@/lib/db";
 import { date } from "@/lib/format";
-import { identity, ROLES } from "@/lib/security";
+import { ROLES, requirePageRoles } from "@/lib/security";
 
-type Setting = {
-  id: string;
-  setting_name: string;
-  category: string;
-  rate: number;
-  lower_threshold: number | null;
-  upper_threshold: number | null;
-  effective_date: string;
-  source_reference: string | null;
-  confirmed_by_name: string | null;
-  confirmed_at: string | null;
-  confirmation_note: string | null;
-};
+type Setting={id:string;setting_name:string;category:string;rate:number;lower_threshold:number|null;upper_threshold:number|null;effective_date:string;source_reference:string|null;confirmed_by_name:string|null;confirmed_at:string|null;confirmation_note:string|null};
+type UserProfile={id:string;email:string;full_name:string;role:string;active:boolean;auth_user_id:string|null;department:string|null;employee_no:string|null;created_at:string};
+type Option={id:string;name:string};
+type EmployeeOption={id:string;employee_no:string;full_name:string};
+const OPTIONAL_ESCALATIONS=[
+  ["CEO_PAYROLL_INCREASE_PERCENT","Payroll increase percentage"],
+  ["CEO_BONUS_THRESHOLD","Individual bonus threshold"],
+  ["CEO_REOPENED_PAYROLL_REQUIRED","Reopened payroll rule (1 = enabled)"],
+] as const;
 
-type UserProfile = {
-  id: string;
-  email: string;
-  full_name: string;
-  role: string;
-  active: boolean;
-  auth_user_id: string | null;
-  created_at: string;
-};
-
-export default async function SettingsPage() {
-  const { profile } = await identity();
-  const sql = db();
-  const [settingRows, userRows] = await Promise.all([
-    sql`SELECT id,setting_name,category,rate::float,lower_threshold::float,upper_threshold::float,effective_date,source_reference,
-      confirmed_by_name,confirmed_at,confirmation_note
-      FROM statutory_settings WHERE active ORDER BY category,lower_threshold NULLS FIRST,setting_name`,
-    sql`SELECT id,email,full_name,role,active,auth_user_id,created_at FROM user_profiles ORDER BY created_at`,
+export default async function SettingsPage(){
+  const {profile}=await requirePageRoles("System Administrator","Payroll Officer");
+  const sql=db();const admin=profile.role==="System Administrator";const accounts=profile.role==="Payroll Officer";
+  const settingPromise=sql`SELECT id,setting_name,category,rate::float,lower_threshold::float,upper_threshold::float,effective_date,source_reference,confirmed_by_name,confirmed_at,confirmation_note FROM statutory_settings WHERE active ORDER BY category,lower_threshold NULLS FIRST,setting_name`;
+  const [settingRows,userRows,departmentRows,employeeRows]=await Promise.all([
+    settingPromise,
+    admin?sql`SELECT u.id,u.email,u.full_name,u.role,u.active,u.auth_user_id,d.name department,e.employee_no,u.created_at FROM user_profiles u LEFT JOIN departments d ON d.id=u.department_id LEFT JOIN employees e ON e.id=u.employee_id ORDER BY u.created_at`:Promise.resolve([]),
+    admin?sql`SELECT id,name FROM departments WHERE active ORDER BY name`:Promise.resolve([]),
+    admin?sql`SELECT id,employee_no,full_name FROM employees ORDER BY full_name`:Promise.resolve([]),
   ]);
-  const settings = settingRows as Setting[];
-  const users = userRows as UserProfile[];
-  const admin = profile!.role === "System Administrator";
-  const accounts = profile!.role === "Payroll Officer";
-  const emailConfigured = approvalEmailConfigured();
-  const statutorySettings = settings.filter((setting) => setting.category === "PAYE" || setting.category === "Pension");
-  const pendingConfirmations = statutorySettings.filter((setting) => !setting.confirmed_at).length;
-  const latestConfirmation = statutorySettings
-    .filter((setting) => setting.confirmed_at)
-    .sort((a, b) => new Date(b.confirmed_at!).getTime() - new Date(a.confirmed_at!).getTime())[0];
-
-  return <>
-    <div className="page-head">
-      <div><span className="eyebrow">Effective-dated controls</span><h1>System settings</h1><p>Statutory values remain configurable and require recorded Accounts confirmation.</p></div>
-    </div>
-    <section className="grid two">
-      <article className="card">
-        <h2>Pension and escalation</h2>
-        {settings.filter((setting) => setting.category !== "PAYE").map((setting) => <form action={updateSetting} className="setting-row" key={setting.id}>
-          <input type="hidden" name="settingName" value={setting.setting_name}/>
-          <div><b>{setting.setting_name.replaceAll("_", " ")}</b><small>{setting.source_reference}</small></div>
-          <input name="rate" type="number" step=".01" defaultValue={setting.rate} disabled={!admin}/>
-          <input name="source" defaultValue={setting.source_reference || "Administrative verification required"} hidden={!admin}/>
-          {admin && <button className="button">Save</button>}
-        </form>)}
-      </article>
-      <article className="card">
-        <h2>Security status</h2>
-        <div className="data-row"><span>Authentication</span><span className="badge green">Neon Auth active</span></div>
-        <div className="data-row"><span>Database</span><span className="badge green">PostgreSQL connected</span></div>
-        <div className="data-row"><span>Role enforcement</span><span className="badge green">Server-side</span></div>
-        <div className="data-row"><span>Audit records</span><span className="badge green">Append-only</span></div>
-        <div className="data-row"><span>Payroll transitions</span><span className="badge green">Database function</span></div>
-        <div className="data-row"><span>Approval email</span><span className={`badge ${emailConfigured ? "green" : "amber"}`}>{emailConfigured ? "Configured" : "Setup required"}</span></div>
-      </article>
-    </section>
-    <section className="card space-top">
-      <div className="card-head"><div><h2>Approval notification rules</h2><p>Every rule creates an in-app alert and queues an email for each active user assigned the target role.</p></div><span className={`badge ${emailConfigured ? "green" : "amber"}`}>{emailConfigured ? "In-app + email" : "In-app active"}</span></div>
-      <div className="data-row"><span>Payroll submitted</span><b>Head of Department</b></div>
-      <div className="data-row"><span>Department verification completed</span><b>General Manager</b></div>
-      <div className="data-row"><span>GM approval exceeds escalation threshold</span><b>CEO</b></div>
-      <div className="data-row"><span>GM or CEO gives final approval</span><b>Payment Officer</b></div>
-      <div className="data-row"><span>Payroll returned for correction</span><b>Payroll Officer</b></div>
-      <div className="data-row"><span>Payment recorded and payroll locked</span><b>Payroll Officer · System Administrator</b></div>
-      {!emailConfigured ? <div className="info-box compact space-top">Add RESEND_API_KEY and PAYROLL_EMAIL_FROM in Vercel to activate email delivery. Pending emails remain available for retry.</div> : null}
-      {admin && emailConfigured ? <form action={retryApprovalEmails} className="space-top"><button className="button">Retry queued approval emails</button></form> : null}
-    </section>
-    <section className="card space-top" id="statutory-confirmation">
-      <div className="card-head">
-        <div><h2>Statutory rate confirmation</h2><p>Accounts must review the active PAYE and pension values against current official sources.</p></div>
-        <span className={`badge ${pendingConfirmations ? "amber" : "green"}`}>{pendingConfirmations ? `${pendingConfirmations} pending` : "Confirmed"}</span>
-      </div>
-      {pendingConfirmations > 0 ? <>
-        <div className="info-box compact space-top">Confirmation records who reviewed the rates; it does not change any rate or threshold.</div>
-        {accounts ? <form action={confirmStatutoryRates} className="confirmation-form">
-          <label>Verification reference or note<input name="reference" minLength={5} maxLength={180} placeholder="Example: GRA and SSNIT schedules reviewed" required/></label>
-          <label className="attestation"><input name="attestation" type="checkbox" value="confirmed" required/> I confirm that Accounts has reviewed every active PAYE and pension value.</label>
-          <button className="button primary">Confirm current statutory rates</button>
-        </form> : <p className="space-top">A user assigned the <b>Payroll Officer</b> role must complete this confirmation.</p>}
-      </> : latestConfirmation ? <div className="data-row space-top"><span>Latest Accounts confirmation<small>{latestConfirmation.confirmation_note}</small></span><b>{latestConfirmation.confirmed_by_name}<small>{date(latestConfirmation.confirmed_at!)}</small></b></div> : null}
-    </section>
-    <section className="card space-top">
-      <h2>Monthly PAYE bands</h2>
-      <div className="table-wrap"><table><thead><tr><th>Setting</th><th>Lower</th><th>Upper</th><th>Rate</th><th>Effective</th><th>Reference</th></tr></thead><tbody>{settings.filter((setting) => setting.category === "PAYE").map((setting) => <tr key={setting.id}><td><b>{setting.setting_name}</b></td><td>{setting.lower_threshold ?? "—"}</td><td>{setting.upper_threshold ?? "Remainder"}</td><td>{setting.rate}%</td><td>{date(setting.effective_date)}</td><td>{setting.source_reference}</td></tr>)}</tbody></table></div>
-    </section>
-    <section className="card space-top">
-      <div className="card-head"><div><h2>User access</h2><p>Accounts only receive access after their email is assigned a role.</p></div></div>
-      {admin && <details className="form-card"><summary>+ Invite or update user</summary><form action={inviteUser} className="inline-form"><input name="fullName" placeholder="Full name" required/><input name="email" type="email" placeholder="Work email" required/><select name="role">{ROLES.map((role) => <option key={role}>{role}</option>)}</select><button className="button primary">Grant access</button></form></details>}
-      <div className="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Account</th><th>Granted</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><b>{user.full_name}</b><small>{user.email}</small></td><td><span className="badge blue">{user.role}</span></td><td><span className={`badge ${user.auth_user_id ? "green" : "amber"}`}>{user.auth_user_id ? "Activated" : "Invitation pending"}</span></td><td>{date(user.created_at)}</td></tr>)}</tbody></table></div>
-    </section>
+  const settings=settingRows as Setting[],users=userRows as UserProfile[],departments=departmentRows as Option[],employees=employeeRows as EmployeeOption[];
+  const emailConfigured=approvalEmailConfigured();const statutory=settings.filter(s=>s.category==="PAYE"||s.category==="Pension");
+  const pending=statutory.filter(s=>!s.confirmed_at).length;const latest=statutory.filter(s=>s.confirmed_at).sort((a,b)=>new Date(b.confirmed_at!).getTime()-new Date(a.confirmed_at!).getTime())[0];
+  const today=new Date().toISOString().slice(0,10);
+  return <><div className="page-head"><div><span className="eyebrow">Effective-dated controls</span><h1>System settings</h1><p>Access and statutory responsibilities are separated by role.</p></div></div>
+    {admin?<section className="grid two"><article className="card"><h2>Pension and escalation</h2>{settings.filter(s=>s.category!=="PAYE").map(s=><form action={updateSetting} className="setting-row" key={s.id}><input type="hidden" name="settingName" value={s.setting_name}/><div><b>{s.setting_name.replaceAll("_"," ")}</b><small>{s.source_reference}</small></div><input name="rate" type="number" step=".01" defaultValue={s.rate}/><input name="effectiveDate" type="date" min={today} defaultValue={today} aria-label="Effective date" required/><input name="source" defaultValue={s.source_reference||"Administrative verification required"} aria-label="Source reference" required/><button className="button">Create version</button></form>)}{OPTIONAL_ESCALATIONS.filter(([name])=>!settings.some(s=>s.setting_name===name)).map(([name,label])=><form action={updateSetting} className="setting-row" key={name}><input type="hidden" name="settingName" value={name}/><div><b>{label}</b><small>Not configured</small></div><input name="rate" type="number" min="0" step=".01" placeholder="Value" required/><input name="effectiveDate" type="date" min={today} defaultValue={today} aria-label="Effective date" required/><input name="source" placeholder="Approved policy reference" aria-label="Source reference" required/><button className="button">Configure</button></form>)}</article><article className="card"><h2>Security status</h2><Status label="Authentication" value="Neon Auth active"/><Status label="Read permissions" value="Role-scoped"/><Status label="Write permissions" value="Server and database enforced"/><Status label="Audit records" value="Append-only"/><Status label="Approval email" value={emailConfigured?"Configured":"Setup required"} warn={!emailConfigured}/></article></section>:null}
+    <section className="card space-top"><div className="card-head"><div><h2>Approval notification rules</h2><p>Each transition creates an in-app alert and queues email for the responsible role.</p></div><span className={`badge ${emailConfigured?"green":"amber"}`}>{emailConfigured?"In-app + email":"In-app active"}</span></div><Rule event="Payroll submitted" role="HODs for included departments"/><Rule event="All departments verified" role="General Manager"/><Rule event="Configured escalation triggered" role="CEO"/><Rule event="Final approval" role="Payment Officer"/><Rule event="Payroll returned" role="Payroll Officer"/><Rule event="Payment reconciled and locked" role="Payroll Officer · System Administrator"/>{!emailConfigured?<div className="info-box compact space-top">Add RESEND_API_KEY and PAYROLL_EMAIL_FROM in Vercel. Pending emails remain available for retry.</div>:null}{admin&&emailConfigured?<form action={retryApprovalEmails} className="space-top"><button className="button">Retry queued approval emails</button></form>:null}</section>
+    <section className="card space-top" id="statutory-confirmation"><div className="card-head"><div><h2>Statutory rate confirmation</h2><p>Accounts must verify the active PAYE and pension values against official sources.</p></div><span className={`badge ${pending?"amber":"green"}`}>{pending?`${pending} pending`:"Confirmed"}</span></div>{pending>0?(accounts?<form action={confirmStatutoryRates} className="confirmation-form"><label>Verification reference or note<input name="reference" minLength={5} maxLength={180} required/></label><label className="attestation"><input name="attestation" type="checkbox" value="confirmed" required/> I confirm that Accounts reviewed every active PAYE and pension value.</label><button className="button primary">Confirm current statutory rates</button></form>:<p className="space-top">A Payroll Officer must complete this confirmation.</p>):latest?<div className="data-row space-top"><span>Latest confirmation<small>{latest.confirmation_note}</small></span><b>{latest.confirmed_by_name}<small>{date(latest.confirmed_at!)}</small></b></div>:null}</section>
+    <section className="card space-top"><h2>Monthly PAYE bands</h2><div className="table-wrap"><table><thead><tr><th>Setting</th><th>Lower</th><th>Upper</th><th>Rate</th><th>Effective</th><th>Reference</th>{admin?<th>Action</th>:null}</tr></thead><tbody>{settings.filter(s=>s.category==="PAYE").map(s=><tr key={s.id}><td><b>{s.setting_name}</b></td><td>{s.lower_threshold??"—"}</td><td>{s.upper_threshold??"Remainder"}</td><td>{s.rate}%</td><td>{date(s.effective_date)}</td><td>{s.source_reference}</td>{admin?<td><details className="row-editor"><summary>Create version</summary><form action={updateSetting}><input type="hidden" name="settingName" value={s.setting_name}/><label>Rate<input name="rate" type="number" min="0" step=".01" defaultValue={s.rate} required/></label><label>Effective date<input name="effectiveDate" type="date" min={today} defaultValue={today} required/></label><label>Source<input name="source" defaultValue={s.source_reference||""} required/></label><button className="button">Save version</button></form></details></td>:null}</tr>)}</tbody></table></div></section>
+    {admin?<section className="card space-top"><div className="card-head"><div><h2>User access</h2><p>HOD and Employee accounts must be linked to their authorized records.</p></div></div><details className="form-card"><summary>+ Invite or update user</summary><form action={inviteUser} className="form-grid"><label>Full name<input name="fullName" required/></label><label>Work email<input name="email" type="email" required/></label><label>Role<select name="role">{ROLES.map(role=><option key={role}>{role}</option>)}</select></label><label>HOD department<select name="departmentId"><option value="">Not applicable</option>{departments.map(d=><option value={d.id} key={d.id}>{d.name}</option>)}</select></label><label>Employee record<select name="employeeId"><option value="">Not applicable</option>{employees.map(e=><option value={e.id} key={e.id}>{e.employee_no} · {e.full_name}</option>)}</select></label><div className="form-actions"><button className="button primary">Grant or update access</button></div></form></details><div className="table-wrap"><table><thead><tr><th>User</th><th>Role and scope</th><th>Account</th><th>Access control</th></tr></thead><tbody>{users.map(u=><tr key={u.id}><td><b>{u.full_name}</b><small>{u.email}</small></td><td><span className="badge blue">{u.role}</span><small>{u.department||u.employee_no||"Company role"}</small></td><td><span className={`badge ${u.active?(u.auth_user_id?"green":"amber"):"red"}`}>{u.active?(u.auth_user_id?"Activated":"Invitation pending"):"Deactivated"}</span><small>{date(u.created_at)}</small></td><td>{u.id===profile.id?<span className="muted">Current account</span>:<details className="row-editor"><summary>{u.active?"Deactivate":"Reactivate"}</summary><form action={updateUserAccess}><input type="hidden" name="profileId" value={u.id}/><input type="hidden" name="action" value={u.active?"deactivate":"reactivate"}/><label>Confirm email<input name="confirmation" type="email" placeholder={u.email} required/></label><button className="button">{u.active?"Deactivate access":"Reactivate access"}</button></form></details>}</td></tr>)}</tbody></table></div></section>:null}
   </>;
 }
+
+function Status({label,value,warn=false}:{label:string;value:string;warn?:boolean}){return <div className="data-row"><span>{label}</span><span className={`badge ${warn?"amber":"green"}`}>{value}</span></div>}
+function Rule({event,role}:{event:string;role:string}){return <div className="data-row"><span>{event}</span><b>{role}</b></div>}

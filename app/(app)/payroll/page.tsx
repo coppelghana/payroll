@@ -1,13 +1,13 @@
 import { createPeriod, recalculatePayroll, updatePayrollInput } from "@/app/actions";
 import { db } from "@/lib/db";
 import { money } from "@/lib/format";
-import { identity } from "@/lib/security";
+import { requirePageRoles } from "@/lib/security";
 
 type Period={id:string;period_code:string;month:number;year:number;status:string;stage:number;payment_date:string;locked_at:string|null};
 type Entry={id:string;employee_no:string;full_name:string;department:string;basic_salary:number;allowances:number;overtime:number;bonus:number;gross_pay:number;employee_pension:number;paye:number;loan_deduction:number;other_deductions:number;net_pay:number;employer_pension:number};
 
 export default async function PayrollPage({searchParams}:{searchParams:Promise<{period?:string}>}){
-  const {profile}=await identity();const sql=db();const periods=await sql`SELECT id,period_code,month,year,status,stage,payment_date,locked_at FROM payroll_periods ORDER BY year DESC,month DESC` as Period[];
+  const {profile}=await requirePageRoles("Payroll Officer");const sql=db();const periods=await sql`SELECT id,period_code,month,year,status,stage,payment_date,locked_at FROM payroll_periods ORDER BY year DESC,month DESC` as Period[];
   const query=await searchParams;const selected=periods.find(p=>p.id===query.period)||periods[0];
   const entries=selected?await sql`SELECT pe.id,e.employee_no,e.full_name,d.name department,pe.basic_salary::float,pe.allowances::float,pe.overtime::float,pe.bonus::float,pe.gross_pay::float,pe.employee_pension::float,pe.paye::float,pe.loan_deduction::float,pe.other_deductions::float,pe.net_pay::float,pe.employer_pension::float FROM payroll_entries pe JOIN employees e ON e.id=pe.employee_id JOIN departments d ON d.id=e.department_id WHERE pe.period_id=${selected.id} ORDER BY e.full_name` as Entry[]:[];
   const totals=entries.reduce((a,e)=>({gross:a.gross+e.gross_pay,net:a.net+e.net_pay,paye:a.paye+e.paye,pension:a.pension+e.employee_pension}),{gross:0,net:0,paye:0,pension:0});const editable=profile!.role==="Payroll Officer"&&selected?.stage===0;
