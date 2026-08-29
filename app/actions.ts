@@ -69,7 +69,7 @@ export async function inviteUser(formData: FormData) {
       INSERT INTO user_profiles(email,full_name,role) VALUES(${parsed.data.email.toLowerCase()},${parsed.data.fullName},${parsed.data.role})
       ON CONFLICT(email) DO UPDATE SET full_name=excluded.full_name,role=excluded.role,active=true,updated_at=now() RETURNING id
     ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-      SELECT 'USER_INVITED','user_profile',id::text,${user.id},${profile.full_name},${profile.role},'User access granted',jsonb_build_object('email',${parsed.data.email},'role',${parsed.data.role}) FROM invited`;
+      SELECT 'USER_INVITED','user_profile',id::text,${user.id},${profile.full_name},${profile.role},'User access granted',jsonb_build_object('email',${parsed.data.email}::text,'role',${parsed.data.role}::text) FROM invited`;
   } catch (error) {
     console.error("[admin] invite user failed", { message: error instanceof Error ? error.message : "Unknown database error" });
     redirect("/settings?error=User+access+could+not+be+saved");
@@ -93,7 +93,7 @@ export async function createEmployee(formData: FormData) {
       INSERT INTO employees(employee_no,full_name,department_id,job_title,employment_type,date_joined,basic_salary,bank_name,account_name,account_number,ssnit_number,created_by)
       VALUES(${parsed.data.employeeNo},${parsed.data.fullName},${parsed.data.departmentId},${parsed.data.jobTitle},${parsed.data.employmentType},${parsed.data.dateJoined},${parsed.data.basicSalary},${parsed.data.bankName || null},${parsed.data.accountName || null},${parsed.data.accountNumber || null},${parsed.data.ssnitNumber || null},${user.id}) RETURNING id
     ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-      SELECT 'EMPLOYEE_CREATED','employee',id::text,${user.id},${profile.full_name},${profile.role},'Employee record created',jsonb_build_object('employee_no',${parsed.data.employeeNo}) FROM employee`;
+      SELECT 'EMPLOYEE_CREATED','employee',id::text,${user.id},${profile.full_name},${profile.role},'Employee record created',jsonb_build_object('employee_no',${parsed.data.employeeNo}::text) FROM employee`;
   } catch (error) {
     console.error("[admin] create employee failed", { message: error instanceof Error ? error.message : "Unknown database error" });
     redirect("/employees?error=Employee+record+could+not+be+saved.+Check+that+the+employee+number+is+unique");
@@ -172,7 +172,7 @@ export async function updateSetting(formData: FormData) {
       WHERE setting_name=${parsed.data.settingName} AND active=true
       RETURNING setting_name
     ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-      SELECT 'SETTING_UPDATED','statutory_setting',setting_name,${user.id},${profile.full_name},${profile.role},'Statutory setting updated',jsonb_build_object('new_rate',${parsed.data.rate}) FROM changed`;
+      SELECT 'SETTING_UPDATED','statutory_setting',setting_name,${user.id},${profile.full_name},${profile.role},'Statutory setting updated',jsonb_build_object('new_rate',${parsed.data.rate}::numeric) FROM changed`;
   } catch (error) {
     console.error("[admin] update setting failed", { message: error instanceof Error ? error.message : "Unknown database error" });
     redirect("/settings?error=The+setting+could+not+be+saved");
