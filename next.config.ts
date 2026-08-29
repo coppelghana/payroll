@@ -2,7 +2,12 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  experimental: { serverActions: { bodySizeLimit: "1mb" } },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "1mb",
+      allowedOrigins: ["coppel-payroll-coppelgh-5560.vercel.app"],
+    },
+  },
   async headers() {
     return [{
       source: "/(.*)",

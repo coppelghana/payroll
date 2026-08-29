@@ -58,17 +58,24 @@ export async function bootstrapAdmin(formData: FormData) {
 
 export async function inviteUser(formData: FormData) {
   const { user, profile } = await requireRoles("System Administrator");
-  const parsed = z.object({ email: z.email(), fullName: text, role: roleSchema }).parse({
+  const parsed = z.object({ email: z.email(), fullName: text, role: roleSchema }).safeParse({
     email: formData.get("email"), fullName: formData.get("fullName"), role: formData.get("role")
   });
-  if (isRetiredDemoIdentity(parsed.email)) throw new Error("The retired demonstration account cannot be granted access.");
+  if (!parsed.success) redirect("/settings?error=Enter+a+valid+name%2C+email+and+role");
+  if (isRetiredDemoIdentity(parsed.data.email)) redirect("/settings?error=The+retired+demo+account+cannot+be+invited");
   const sql = db();
-  await sql`WITH invited AS (
-    INSERT INTO user_profiles(email,full_name,role) VALUES(${parsed.email.toLowerCase()},${parsed.fullName},${parsed.role})
-    ON CONFLICT(email) DO UPDATE SET full_name=excluded.full_name,role=excluded.role,active=true,updated_at=now() RETURNING id
-  ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-    SELECT 'USER_INVITED','user_profile',id::text,${user.id},${profile.full_name},${profile.role},'User access granted',jsonb_build_object('email',${parsed.email},'role',${parsed.role}) FROM invited`;
+  try {
+    await sql`WITH invited AS (
+      INSERT INTO user_profiles(email,full_name,role) VALUES(${parsed.data.email.toLowerCase()},${parsed.data.fullName},${parsed.data.role})
+      ON CONFLICT(email) DO UPDATE SET full_name=excluded.full_name,role=excluded.role,active=true,updated_at=now() RETURNING id
+    ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
+      SELECT 'USER_INVITED','user_profile',id::text,${user.id},${profile.full_name},${profile.role},'User access granted',jsonb_build_object('email',${parsed.data.email},'role',${parsed.data.role}) FROM invited`;
+  } catch (error) {
+    console.error("[admin] invite user failed", { message: error instanceof Error ? error.message : "Unknown database error" });
+    redirect("/settings?error=User+access+could+not+be+saved");
+  }
   revalidatePath("/settings");
+  redirect("/settings?success=User+access+granted");
 }
 
 export async function createEmployee(formData: FormData) {
@@ -78,14 +85,21 @@ export async function createEmployee(formData: FormData) {
     employmentType: z.enum(["Permanent","Fixed Term","Contract","Casual","Temporary","Apprentice"]),
     dateJoined: z.iso.date(), basicSalary: z.coerce.number().min(0).max(10000000), bankName: z.string().trim().max(120).optional(),
     accountName: z.string().trim().max(180).optional(), accountNumber: z.string().trim().max(80).optional(), ssnitNumber: z.string().trim().max(80).optional()
-  }).parse(Object.fromEntries(formData));
+  }).safeParse(Object.fromEntries(formData));
+  if (!parsed.success) redirect("/employees?error=Check+the+required+employee+fields+and+use+an+employee+number+such+as+CPL-007");
   const sql = db();
-  await sql`WITH employee AS (
-    INSERT INTO employees(employee_no,full_name,department_id,job_title,employment_type,date_joined,basic_salary,bank_name,account_name,account_number,ssnit_number,created_by)
-    VALUES(${parsed.employeeNo},${parsed.fullName},${parsed.departmentId},${parsed.jobTitle},${parsed.employmentType},${parsed.dateJoined},${parsed.basicSalary},${parsed.bankName || null},${parsed.accountName || null},${parsed.accountNumber || null},${parsed.ssnitNumber || null},${user.id}) RETURNING id
-  ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-    SELECT 'EMPLOYEE_CREATED','employee',id::text,${user.id},${profile.full_name},${profile.role},'Employee record created',jsonb_build_object('employee_no',${parsed.employeeNo}) FROM employee`;
+  try {
+    await sql`WITH employee AS (
+      INSERT INTO employees(employee_no,full_name,department_id,job_title,employment_type,date_joined,basic_salary,bank_name,account_name,account_number,ssnit_number,created_by)
+      VALUES(${parsed.data.employeeNo},${parsed.data.fullName},${parsed.data.departmentId},${parsed.data.jobTitle},${parsed.data.employmentType},${parsed.data.dateJoined},${parsed.data.basicSalary},${parsed.data.bankName || null},${parsed.data.accountName || null},${parsed.data.accountNumber || null},${parsed.data.ssnitNumber || null},${user.id}) RETURNING id
+    ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
+      SELECT 'EMPLOYEE_CREATED','employee',id::text,${user.id},${profile.full_name},${profile.role},'Employee record created',jsonb_build_object('employee_no',${parsed.data.employeeNo}) FROM employee`;
+  } catch (error) {
+    console.error("[admin] create employee failed", { message: error instanceof Error ? error.message : "Unknown database error" });
+    redirect("/employees?error=Employee+record+could+not+be+saved.+Check+that+the+employee+number+is+unique");
+  }
   revalidatePath("/employees"); revalidatePath("/dashboard");
+  redirect("/employees?success=Employee+record+created");
 }
 
 export async function createPeriod(formData: FormData) {
@@ -148,10 +162,21 @@ export async function recordPayment(formData: FormData) {
 
 export async function updateSetting(formData: FormData) {
   const { user, profile } = await requireRoles("System Administrator");
-  const parsed = z.object({ settingName: z.string().trim().regex(/^[A-Z0-9_]+$/), rate: z.coerce.number().min(0).max(100000000), source: text }).parse(Object.fromEntries(formData));
+  const parsed = z.object({ settingName: z.string().trim().regex(/^[A-Z0-9_]+$/), rate: z.coerce.number().min(0).max(100000000), source: text }).safeParse(Object.fromEntries(formData));
+  if (!parsed.success) redirect("/settings?error=Enter+a+valid+rate+and+retain+the+source+reference");
   const sql = db();
-  await sql`UPDATE statutory_settings SET rate=${parsed.rate},source_reference=${parsed.source},updated_by=${user.id},updated_at=now() WHERE setting_name=${parsed.settingName} AND active=true`;
-  await sql`INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
-    VALUES('SETTING_UPDATED','statutory_setting',${parsed.settingName},${user.id},${profile.full_name},${profile.role},'Statutory setting updated',jsonb_build_object('new_rate',${parsed.rate}))`;
+  try {
+    await sql`WITH changed AS (
+      UPDATE statutory_settings
+      SET rate=${parsed.data.rate},source_reference=${parsed.data.source},updated_by=${user.id},updated_at=now()
+      WHERE setting_name=${parsed.data.settingName} AND active=true
+      RETURNING setting_name
+    ) INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
+      SELECT 'SETTING_UPDATED','statutory_setting',setting_name,${user.id},${profile.full_name},${profile.role},'Statutory setting updated',jsonb_build_object('new_rate',${parsed.data.rate}) FROM changed`;
+  } catch (error) {
+    console.error("[admin] update setting failed", { message: error instanceof Error ? error.message : "Unknown database error" });
+    redirect("/settings?error=The+setting+could+not+be+saved");
+  }
   revalidatePath("/settings");
+  redirect("/settings?success=Setting+updated");
 }
