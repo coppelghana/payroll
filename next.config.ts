@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "1mb",
       allowedOrigins: [
         "coppel-payroll-coppelgh-5560.vercel.app",
-        "payroll.coppelghana.com",
+        "payroll.coppelafrica.com",
       ],
     },
   },
