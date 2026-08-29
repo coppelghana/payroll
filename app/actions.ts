@@ -10,6 +10,7 @@ import { z } from "zod";
 
 const text = z.string().trim().min(1).max(180);
 const roleSchema = z.enum(ROLES);
+const employmentStatusSchema = z.enum(["Active", "Suspended", "On Leave", "Terminated", "Resigned", "Retired", "Deceased"]);
 
 function safeEqual(a: string, b: string) {
   const x = Buffer.from(a), y = Buffer.from(b);
@@ -100,6 +101,67 @@ export async function createEmployee(formData: FormData) {
   }
   revalidatePath("/employees"); revalidatePath("/dashboard");
   redirect("/employees?success=Employee+record+created");
+}
+
+export async function updateEmployeeStatus(formData: FormData) {
+  const { user, profile } = await requireRoles("HR / Administrator", "System Administrator");
+  const parsed = z.object({
+    employeeId: z.uuid(),
+    employeeNo: z.string().trim().regex(/^[A-Z0-9-]{3,30}$/),
+    status: employmentStatusSchema,
+    reason: z.string().trim().min(5).max(500),
+    confirmation: z.string().trim().max(30)
+  }).safeParse({
+    employeeId: formData.get("employeeId"),
+    employeeNo: formData.get("employeeNo"),
+    status: formData.get("status"),
+    reason: formData.get("reason"),
+    confirmation: formData.get("confirmation")
+  });
+
+  if (!parsed.success) redirect("/employees?error=Select+a+valid+status%2C+give+a+reason%2C+and+confirm+the+employee+number");
+  if (parsed.data.confirmation.toUpperCase() !== parsed.data.employeeNo) {
+    redirect("/employees?error=The+confirmation+employee+number+does+not+match");
+  }
+
+  type StatusResult = { found: boolean; current_status: string | null; changed: number; audited: number };
+  let result: StatusResult;
+  try {
+    const rows = await db()`WITH target AS (
+      SELECT id,employee_no,full_name,employment_status
+      FROM employees
+      WHERE id=${parsed.data.employeeId} AND employee_no=${parsed.data.employeeNo}
+    ), changed AS (
+      UPDATE employees e
+      SET employment_status=${parsed.data.status},updated_at=now()
+      FROM target t
+      WHERE e.id=t.id AND e.employment_status<>${parsed.data.status}
+      RETURNING e.id,e.employee_no,e.full_name,t.employment_status previous_status,e.employment_status new_status
+    ), audited AS (
+      INSERT INTO audit_log(event_type,entity_type,entity_id,actor_auth_id,actor_name,actor_role,description,metadata)
+      SELECT 'EMPLOYEE_STATUS_CHANGED','employee',id::text,${user.id},${profile.full_name},${profile.role},
+        'Employee '||employee_no||' status changed from '||previous_status||' to '||new_status||': '||${parsed.data.reason}::text,
+        jsonb_build_object('employee_no',employee_no,'previous_status',previous_status,'new_status',new_status,'reason',${parsed.data.reason}::text)
+      FROM changed
+      RETURNING id
+    )
+    SELECT EXISTS(SELECT 1 FROM target) found,
+      (SELECT employment_status FROM target) current_status,
+      (SELECT count(*)::int FROM changed) changed,
+      (SELECT count(*)::int FROM audited) audited` as StatusResult[];
+    result = rows[0];
+  } catch (error) {
+    console.error("[admin] update employee status failed", { message: error instanceof Error ? error.message : "Unknown database error" });
+    redirect("/employees?error=Employee+status+could+not+be+updated");
+  }
+
+  if (!result.found) redirect("/employees?error=Employee+record+was+not+found");
+  if (result.changed === 0) redirect(`/employees?error=${encodeURIComponent(`Employee is already ${result.current_status}`)}`);
+
+  revalidatePath("/employees");
+  revalidatePath("/dashboard");
+  revalidatePath("/payroll");
+  redirect(`/employees?success=${encodeURIComponent(`Employee status updated to ${parsed.data.status}`)}`);
 }
 
 export async function createPeriod(formData: FormData) {
